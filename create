@@ -1,0 +1,137 @@
+#!/bin/bash
+set -euo pipefail
+
+function useDockerEnv {
+    eval "$(docker-machine env $1)"
+}
+
+
+function getIfaceIP {
+    local machine="$1"
+    local iface="$2"
+    docker-machine ssh "$machine" "ifconfig $iface | grep 'inet addr:' | cut -d: -f2 | awk '{ print \$1}'"
+}
+
+function machineExists {
+    set +e
+    docker-machine ls -q --filter "name=$1"
+    set -e
+}
+
+
+function clearup {
+    activeMachine="$(docker-machine active 2 > /dev/null)"
+    if [[ $activeMachine ]]
+    then
+        eval "$(docker-machine env -u $activeMachine)" > /dev/null 2>&1
+    fi
+
+    docker rm -f consul-local 2>/dev/null
+}
+
+set +e
+clearup
+set -e
+
+echo
+echo
+echo
+echo Creating Consul node \(swarm-consul\)
+echo
+echo
+echo
+
+
+if [[ ! $(machineExists swarm-consul) ]]
+then
+#10.0.2.2 is the host ip in virtualbox
+    docker-machine create -d virtualbox \
+        --engine-opt="dns=172.17.0.1" \
+        --engine-opt="dns=8.8.8.8" \
+        swarm-consul
+fi
+
+CONSUL_IP="$(docker-machine ip swarm-consul)"
+echo "Consul (swarm-consul) IP: ${CONSUL_IP}"
+CONSUL_DOCKER_BRIDGE_IP=$(getIfaceIP swarm-consul docker0)
+echo "Docker Bridge IP on Consul node (swarm-consul): ${CONSUL_DOCKER_BRIDGE_IP}"
+
+useDockerEnv swarm-consul
+
+# run consul locally first
+docker run -d \
+    --name consul-agent \
+    -p ${CONSUL_IP}:8300:8300 \
+    -p ${CONSUL_IP}:8301:8301 \
+    -p ${CONSUL_IP}:8301:8301/udp \
+    -p ${CONSUL_IP}:8302:8302 \
+    -p ${CONSUL_IP}:8302:8302/udp \
+    -p ${CONSUL_IP}:8400:8400 \
+    -p ${CONSUL_IP}:8500:8500 \
+    -p ${CONSUL_DOCKER_BRIDGE_IP}:53:53 \
+    progrium/consul -server -bootstrap -advertise $CONSUL_IP -ui-dir /ui
+
+echo
+echo
+echo
+echo Creating master node
+echo
+echo
+echo
+
+
+if [[ ! $(machineExists swarm-master) ]]
+then
+#10.0.2.2 is the host ip in virtualbox
+    docker-machine create -d virtualbox \
+        --swarm \
+        --swarm-master \
+        --swarm-discovery="consul://${CONSUL_IP}:8500" \
+        --engine-opt="dns=172.17.0.1" \
+        --engine-opt="dns=8.8.8.8" \
+        --engine-opt="cluster-store=consul://${CONSUL_IP}:8500" \
+        --engine-opt="cluster-advertise=eth1:2376" \
+        swarm-master
+fi
+
+
+eval "$(docker-machine env --swarm swarm-master)"
+
+masterIp=$(getIfaceIP swarm-master eth1)
+echo "Master IP: ${masterIp}"
+
+masterDockerIp=$(getIfaceIP swarm-master docker0)
+echo "Docker Bridge IP on Master: ${masterDockerIp}"
+
+
+for node in 01
+do
+    echo
+    echo
+    echo Creating Node $node
+    echo 
+    echo
+
+    if [[ ! $(machineExists "swarm-node-$node") ]]
+    then
+        docker-machine create -d virtualbox \
+            --swarm \
+            --swarm-discovery="consul://${CONSUL_IP}:8500" \
+            --engine-opt="dns=172.17.0.1" \
+            --engine-opt="dns=8.8.8.8" \
+            --engine-opt="cluster-store=consul://${CONSUL_IP}:8500" \
+            --engine-opt="cluster-advertise=eth1:2376" \
+            swarm-node-${node}
+    fi
+
+    nodeIp=$(getIfaceIP swarm-node-$node eth0)
+    echo "Node ${node} IP: ${nodeIp}"
+    nodeDockerIp=$(getIfaceIP swarm-node-$node docker0)
+    echo "Docker Bridge IP on Node ${node}: ${nodeDockerIp}"
+done
+
+
+eval "$(docker-machine env --swarm swarm-master)"
+
+docker network create --driver overlay sendify
+

@@ -1,0 +1,3 @@
+[submodule "dev-stack"]
+	path = dev-stack
+	url = ./dev-stack
