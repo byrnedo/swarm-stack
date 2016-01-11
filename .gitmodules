@@ -1,3 +1,3 @@
 [submodule "dev-stack"]
 	path = dev-stack
-	url = ./dev-stack
+	url = https://github.com/byrnedo/dev-stack.git
