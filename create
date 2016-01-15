@@ -18,6 +18,33 @@ function machineExists {
     set -e
 }
 
+function prepareForRexray {
+    echo "Preparing for rexray..."
+    docker-machine ssh "$1"  "[ -f /root/rexray_prepared ] || wget http://tinycorelinux.net/6.x/x86_64/tcz/udev-extra.tcz && tce-load -i udev-extra.tcz && sudo udevadm trigger && sudo touch /root/rexray_prepared"
+}
+
+function installRexray {
+    echo "Installing rexray..."
+    docker-machine ssh "$1" "sudo curl -sSL https://dl.bintray.com/emccode/rexray/install | sh -"
+    docker-machine ssh "$1" "cat <<EOF > /tmp/config.yml && sudo mv /tmp/config.yml /etc/rexray/
+rexray:
+  logLevel: warn
+  storageDrivers:
+  - virtualbox
+  volume:
+    mount:
+      preempt: false
+virtualbox:
+  endpoint: http://10.0.2.2:18083
+  tls: false
+  volumePath: /tmp
+  controllerName: SATA
+EOF
+"
+    docker-machine ssh "$1" "sudo rexray service stop; sudo rexray service start"
+
+}
+
 
 function clearup {
     activeMachine="$(docker-machine active 2 > /dev/null)"
@@ -59,7 +86,7 @@ echo "Docker Bridge IP on Consul node (swarm-consul): ${CONSUL_DOCKER_BRIDGE_IP}
 useDockerEnv swarm-consul
 
 # run consul locally first
-if !docker inspect consul-agent 2>/dev/null; then
+set +e 
 docker run -d \
     --name consul-agent \
     -p ${CONSUL_IP}:8300:8300 \
@@ -71,7 +98,7 @@ docker run -d \
     -p ${CONSUL_IP}:8500:8500 \
     -p ${CONSUL_DOCKER_BRIDGE_IP}:53:53 \
     progrium/consul -server -bootstrap -advertise $CONSUL_IP -ui-dir /ui
-fi
+set -e
 
 echo
 echo
@@ -106,6 +133,9 @@ echo "Master IP: ${masterIp}"
 masterDockerIp=$(getIfaceIP swarm-master docker0)
 echo "Docker Bridge IP on Master: ${masterDockerIp}"
 
+prepareForRexray swarm-master
+installRexray swarm-master
+
 
 for node in infra
 do
@@ -132,6 +162,9 @@ do
     echo "Node ${node} IP: ${nodeIp}"
     nodeDockerIp=$(getIfaceIP swarm-node-$node docker0)
     echo "Docker Bridge IP on Node ${node}: ${nodeDockerIp}"
+
+    prepareForRexray swarm-node-$node
+    installRexray swarm-node-$node
 done
 
 
