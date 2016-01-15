@@ -1,0 +1,11 @@
+#!/bin/bash
+
+eval "$(docker-machine env swarm-master)"
+docker ps -a --format "table {{.Names}}\t{{.Status}}"
+
+docker restart swarm-agent-master swarm-agent 
+
+eval "$(docker-machine env swarm-node-infra)"
+
+docker restart swarm-agent 
+
