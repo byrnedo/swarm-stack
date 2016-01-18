@@ -33,7 +33,7 @@ rexray:
   - virtualbox
   volume:
     mount:
-      preempt: false
+      preempt: true
 virtualbox:
   endpoint: http://10.0.2.2:18083
   tls: false
